@@ -38,8 +38,9 @@ func Workerrun() {
 		now := time.Now()
 		nowUnix := now.Unix()
 
-		before1 := now.AddDate(-3, 0, 0).Unix() + 60000*1000
-		before2 := now.AddDate(-1, 0 , 0).Unix() + 60000*1000
+		before1 := now.AddDate(-3, 0, 0).Unix()
+		before2 := now.AddDate(-1, 0 , 0).Unix()
+		//done := make(chan struct{})
 
 		for i:=0; i<xthreads; i++ {
 			jobNo := i
@@ -55,25 +56,26 @@ func Workerrun() {
 						return
 					}
 					if before1 < nowUnix {
-						before1 += 100
+						before1 += 1
 					} else {
 						before1 =time.Now().Unix()
 					}
 
 					if before2 < nowUnix {
-						before2 += 100
+						before2 += 1
 					} else {
 						before2 =time.Now().Unix()
 					}
 					//InsertWorker(randData(), count) // insert row into test_table
-					err := productModel.InsertWorker(a, jobNo, j[jobNo], before1, before2)
-
-					if err != nil {
-						quit <- true
-					}
+					productModel.InsertWorker(a, jobNo, j[jobNo], before1, before2)
 					j[jobNo] = j[jobNo] + 1
-				case <-quit:
-					fmt.Printf("Error occured")
+
+				//case <-done:
+				//	fmt.Printf("Error occured")
+				//	close(quit)
+				//	break loop
+				case <-time.After(time.Second):
+					close(quit)
 					break loop
 				}
 			}
@@ -81,11 +83,12 @@ func Workerrun() {
 		}
 	}
 	go func() {
+		defer close(ch)
 		for {
 			time.Sleep(time.Millisecond * 1)
 
 			select {
-			case ch <- randData():
+			case ch <-randData():
 			case <-quit:
 				close(ch)
 			}
@@ -93,7 +96,6 @@ func Workerrun() {
 		}
 	}()
 
-	close(quit)
 	wg.Wait()
 }
 
@@ -102,28 +104,27 @@ func randData() string {
 	return gofakeit.Sentence(10)
 }
 
-func (productModel ProductModel) InsertWorker(a string, job, count int, before1, before2 int64) error { // (productModel ProductModel) InsertWorker(a string)
+func (productModel ProductModel) InsertWorker(a string, job, count int, before1, before2 int64) { // (productModel ProductModel) InsertWorker(a string)
 	if count%500 == 0 {
 		fmt.Printf("Insert Worker string: %v, job: %d, count: %d \n", a, job, count)
 	}
 
 	stmt1, err := productModel.Db.Prepare("INSERT INTO test_table(test_table.data, test_table.timestamp) VALUES(?, ?)")
 	if err != nil {
-		return err
+		ErrorCheck(err)
 	}
 	_, inErr := stmt1.Exec(a, before1)
 	if inErr != nil {
-		return err
+		ErrorCheck(inErr)
 	}
 	stmt2, err := productModel.Db.Prepare("INSERT INTO test_table2(test_table2.data2, test_table2.timestamp) VALUES(?, ?)")
 	if err != nil {
-		return err
+		ErrorCheck(err)
 	}
 	_, inErr = stmt2.Exec(a, before2)
 	if inErr != nil {
-		return err
+		ErrorCheck(inErr)
 	}
-	return nil
 }
 
 func ErrorCheck(err error) {

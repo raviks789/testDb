@@ -1,12 +1,15 @@
 package cleanup
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 	"log"
 	"runtime"
 	"sync"
 	"time"
-	"github.com/jmoiron/sqlx"
-	"fmt"
 )
 
 type CleanUpTable struct {
@@ -18,24 +21,35 @@ type CleanUpTable struct {
 }
 
 
-func (c CleanUpTable) start(wg *sync.WaitGroup) {
-	go c.controller(wg)
+func (c CleanUpTable) start(wg *sync.WaitGroup, ctx context.Context) {
+	go c.controller(wg, ctx)
 }
 
-func (c CleanUpTable) controller(wg *sync.WaitGroup) {
+func (c CleanUpTable) controller(wg *sync.WaitGroup, ctx context.Context) {
+	subctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	defer wg.Done()
+	errChan := make(chan error, 1)
+
+	defer close(errChan)
 	for {
-		if err := c.cleanup(); err != nil {
-			wg.Done()
-			log.Print(err)
-			return
+		if err := c.cleanup(subctx); err != nil {
+			errChan <- err
 		}
 		select {
 		case <-time.Tick(c.Tick):
+		case err := <-errChan:
+			cancel()
+
+			log.Println(err)
+		case <-subctx.Done():
+			log.Fatalln(subctx.Err())
 		}
 	}
 }
 
-func (c CleanUpTable) cleanup() error {
+func (c CleanUpTable) cleanup(ctx context.Context) error {
 
 	redo := true
 
@@ -45,17 +59,24 @@ func (c CleanUpTable) cleanup() error {
 	errs := make(chan error, 1)
 	defer close(errs)
 	limit := c.Limit
+
 	for redo {
 		go func() {
-			result, err := c.Db.Exec(
+			result, err := c.Db.ExecContext(
+				ctx,
 				fmt.Sprintf(`DELETE FROM %s WHERE timestamp < ? LIMIT %d`, c.Table, limit),
 				time.Now().Add(-1*c.Period).Unix())
 			if err != nil {
+				fmt.Println(c.Table)
+
 				errs <- err
 				return
 			}
 			affected, err := result.RowsAffected()
 
+			if c.Table == "test_table" {
+				err = errors.New("Testing on test table")
+			}
 			if err != nil {
 				errs <- err
 				return
@@ -96,12 +117,12 @@ func Cleanuprun(){
 		var limit int64
 		switch {
 		case table == "test_table":
-			tempPeriod, _ = time.ParseDuration("18000h")
+			tempPeriod, _ = time.ParseDuration("8000h")
 			tempTick, _ = time.ParseDuration("2m")
 			limit = 1000
 		case table == "test_table2":
-			tempPeriod, _ = time.ParseDuration("800h")
-			tempTick, _ = time.ParseDuration("1.5m")
+			tempPeriod, _ = time.ParseDuration("3.5h")
+			tempTick, _ = time.ParseDuration("3m")
 			limit = 1000
 		default:
 			tempPeriod, _ = time.ParseDuration("7000h")
@@ -122,11 +143,11 @@ func Cleanuprun(){
 	var wg sync.WaitGroup
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
+	ctx := context.TODO()
 	for _, CleanupStruct := range schema_tables {
 
 		wg.Add(1)
-		fmt.Println(CleanupStruct)
-		go CleanupStruct.start(&wg)
+		go CleanupStruct.start(&wg, ctx)
 	}
 	wg.Wait()
 }
