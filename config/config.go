@@ -71,6 +71,12 @@ func (productModel ProductModel) Userconfig() {
 	//db, err := sqlx.Open("mysql", dsn(schemaName))
 	//defer db.Close()
 
+	db, err := sqlx.Open("mysql", dsn(""))
+	productModel.Db = db
+	if err != nil {
+		err = errors.New(fmt.Sprintf("Error %s when opening DB\n", err))
+		return
+	}
 	res, err := productModel.Db.Exec(fmt.Sprintf(`CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED BY '%s'`, username, password))
 	if err != nil {
 		log.Printf("Error %s when creating User\n", err)
@@ -137,8 +143,8 @@ func (productModel ProductModel) Tablesconfig() {
 }
 
 func dsn(dbName string) string {
-	if dbName != "" {
-		return fmt.Sprintf("%s:%s@tcp(%s)/%s", username, password, hostname, schemaName)
+	if dbName == "" {
+		return fmt.Sprintf("%s:%s@tcp(%s)/%s", "root", "password", hostname, dbName)
 	}
-	return ""
+	return fmt.Sprintf("%s:%s@tcp(%s)/%s", username, password, hostname, dbName)
 }
