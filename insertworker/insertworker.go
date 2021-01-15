@@ -23,6 +23,7 @@ func Workerrun() {
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
+	// username:password@protocol(address)/dbname?param=value
 	db, err := sqlx.Open("mysql", "testdb:testdb@tcp(mysql:3306)/testdb")
 
 	if err != nil {
