@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/jmoiron/sqlx"
 	"log"
+	_ "github.com/go-sql-driver/mysql"
 )
 
 const (
@@ -27,6 +28,7 @@ func Congigrun() {
 	productModel := ProductModel{db}
 	productModel.Userconfig()
 	productModel.Tablesconfig()
+	log.Printf("testdb has been configured\n")
 	return
 }
 
