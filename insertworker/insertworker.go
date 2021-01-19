@@ -2,13 +2,14 @@ package insertworker
 
 import (
 	"fmt"
+	"github.com/brianvoe/gofakeit"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"log"
+	"os"
 	"runtime"
 	"sync"
 	"time"
-	"github.com/brianvoe/gofakeit"
 )
 
 type ProductModel struct {
@@ -17,7 +18,8 @@ type ProductModel struct {
 
 func Workerrun() {
 	var ch = make(chan string)
-	var quit = make(chan bool)
+	var quit = make(chan bool, 1)
+
 	var wg sync.WaitGroup
 	xthreads := 8
 
@@ -41,7 +43,6 @@ func Workerrun() {
 
 		before1 := now.AddDate(-3, 0, 0).Unix()
 		before2 := now.AddDate(-1, 0 , 0).Unix()
-		//done := make(chan struct{})
 
 		for i:=0; i<xthreads; i++ {
 			jobNo := i
@@ -49,36 +50,29 @@ func Workerrun() {
 			wg.Add(1)
 
 			go func() {
-			loop: for {
-				select {
-				case a, ok := <-ch:
-					if !ok { // if there is nothing to do and the channel has been closed then end the goroutine
-						wg.Done()
-						return
-					}
-					if before1 < nowUnix {
-						before1 += 1
-					} else {
-						before1 =time.Now().Unix()
-					}
-
-					if before2 < nowUnix {
-						before2 += 1
-					} else {
-						before2 =time.Now().Unix()
-					}
-					//InsertWorker(randData(), count) // insert row into test_table
-					productModel.InsertWorker(a, jobNo, j[jobNo], before1, before2)
-					j[jobNo] = j[jobNo] + 1
-
-				//case <-done:
-				//	fmt.Printf("Error occured")
-				//	close(quit)
-				//	break loop
-				case <-time.After(time.Second):
-					close(quit)
-					break loop
+			for a := range ch {
+				//if !ok { // if there is nothing to do and the channel has been closed then end the goroutine
+				//	wg.Done()
+				//	return
+				//}
+				if before1 < nowUnix {
+					before1 += 1
+				} else {
+					before1 =time.Now().Unix()
 				}
+
+				if before2 < nowUnix {
+					before2 += 1
+				} else {
+					before2 =time.Now().Unix()
+				}
+				//InsertWorker(randData(), count) // insert row into test_table
+				if err := productModel.InsertWorker(a, jobNo, j[jobNo], before1, before2); err != nil {
+					wg.Done()
+					quit <- true
+					return
+				}
+				j[jobNo] = j[jobNo] + 1
 			}
 			}()
 		}
@@ -86,12 +80,13 @@ func Workerrun() {
 	go func() {
 		defer close(ch)
 		for {
-			time.Sleep(time.Millisecond * 1)
+			time.Sleep(time.Second * 2)
 
 			select {
 			case ch <-randData():
 			case <-quit:
 				close(ch)
+				os.Exit(0)
 			}
 
 		}
@@ -105,27 +100,28 @@ func randData() string {
 	return gofakeit.Sentence(10)
 }
 
-func (productModel ProductModel) InsertWorker(a string, job, count int, before1, before2 int64) { // (productModel ProductModel) InsertWorker(a string)
+func (productModel ProductModel) InsertWorker(a string, job, count int, before1, before2 int64) error { // (productModel ProductModel) InsertWorker(a string)
 	if count%500 == 0 {
 		fmt.Printf("Insert Worker string: %v, job: %d, count: %d \n", a, job, count)
 	}
 
 	stmt1, err := productModel.Db.Prepare("INSERT INTO test_table(test_table.data, test_table.timestamp) VALUES(?, ?)")
 	if err != nil {
-		ErrorCheck(err)
+		return err
 	}
 	_, inErr := stmt1.Exec(a, before1)
 	if inErr != nil {
-		ErrorCheck(inErr)
+		return err
 	}
 	stmt2, err := productModel.Db.Prepare("INSERT INTO test_table2(test_table2.data2, test_table2.timestamp) VALUES(?, ?)")
 	if err != nil {
-		ErrorCheck(err)
+		return err
 	}
 	_, inErr = stmt2.Exec(a, before2)
 	if inErr != nil {
-		ErrorCheck(inErr)
+		return err
 	}
+	return nil
 }
 
 func ErrorCheck(err error) {

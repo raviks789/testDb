@@ -20,31 +20,26 @@ type CleanUpTable struct {
 	Limit  int64
 }
 
-
 func (c CleanUpTable) start(wg *sync.WaitGroup, ctx context.Context) {
 	go c.controller(wg, ctx)
 }
 
 func (c CleanUpTable) controller(wg *sync.WaitGroup, ctx context.Context) {
-	subctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	defer wg.Done()
-	errChan := make(chan error, 1)
 
-	defer close(errChan)
 	for {
-		if err := c.cleanup(subctx); err != nil {
-			errChan <- err
+		err := c.cleanup(ctx)
+		if err != nil {
+			cancel()
 		}
 		select {
 		case <-time.Tick(c.Tick):
-		case err := <-errChan:
-			cancel()
-
-			log.Println(err)
-		case <-subctx.Done():
-			log.Fatalln(subctx.Err())
+		case <-ctx.Done():
+			log.Fatalln(err)
+			return
 		}
 	}
 }
@@ -74,8 +69,8 @@ func (c CleanUpTable) cleanup(ctx context.Context) error {
 			}
 			affected, err := result.RowsAffected()
 
-			if c.Table == "test_table" {
-				err = errors.New("Testing on test table")
+			if c.Table == "test_table2" {
+				err = errors.New("Error on test table2")
 			}
 			if err != nil {
 				errs <- err
@@ -117,7 +112,7 @@ func Cleanuprun(){
 		var limit int64
 		switch {
 		case table == "test_table":
-			tempPeriod, _ = time.ParseDuration("8000h")
+			tempPeriod, _ = time.ParseDuration("1000h")
 			tempTick, _ = time.ParseDuration("2m")
 			limit = 1000
 		case table == "test_table2":
@@ -125,7 +120,7 @@ func Cleanuprun(){
 			tempTick, _ = time.ParseDuration("3m")
 			limit = 1000
 		default:
-			tempPeriod, _ = time.ParseDuration("7000h")
+			tempPeriod, _ = time.ParseDuration("50h")
 			tempTick, _ = time.ParseDuration("1.5m")
 			limit = 10000
 		}
