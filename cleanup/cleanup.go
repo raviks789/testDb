@@ -2,49 +2,50 @@ package cleanup
 
 import (
 	"context"
-	"errors"
+	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/jmoiron/sqlx"
+	"github.com/raviks789/testdb/supervar"
+	"gopkg.in/ini.v1"
 	"log"
-	"runtime"
-	"sync"
 	"time"
 )
 
-type CleanUpTable struct {
-	Db     *sqlx.DB
-	Table  string
+type CleanUp struct {
+	Table string
 	Period time.Duration
-	Tick   time.Duration
-	Limit  int64
 }
 
-func (c CleanUpTable) start(wg *sync.WaitGroup, ctx context.Context) {
-	go c.controller(wg, ctx)
+const (
+	Tick = time.Minute
+	Limit = int64(5000)
+)
+
+func (c CleanUp) start(super *supervar.SuperVar, ctx context.Context) {
+
+	go c.controller(super, ctx)
 }
 
-func (c CleanUpTable) controller(wg *sync.WaitGroup, ctx context.Context) {
+func (c CleanUp) controller(super *supervar.SuperVar, ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	defer wg.Done()
-
 	for {
-		err := c.cleanup(ctx)
+		err := c.cleanup(super, ctx)
 		if err != nil {
 			cancel()
 		}
 		select {
-		case <-time.Tick(c.Tick):
+		case <-time.Tick(Tick):
 		case <-ctx.Done():
-			log.Fatalln(err)
+			log.Println(err)
+			super.Wg.Done()
 			return
 		}
 	}
 }
 
-func (c CleanUpTable) cleanup(ctx context.Context) error {
+func (c CleanUp) cleanup(super *supervar.SuperVar, ctx context.Context) error {
 
 	redo := true
 
@@ -53,11 +54,11 @@ func (c CleanUpTable) cleanup(ctx context.Context) error {
 
 	errs := make(chan error, 1)
 	defer close(errs)
-	limit := c.Limit
+	limit := Limit
 
 	for redo {
 		go func() {
-			result, err := c.Db.ExecContext(
+			result, err := super.Db.ExecContext(
 				ctx,
 				fmt.Sprintf(`DELETE FROM %s WHERE timestamp < ? LIMIT %d`, c.Table, limit),
 				time.Now().Add(-1*c.Period).Unix())
@@ -69,9 +70,6 @@ func (c CleanUpTable) cleanup(ctx context.Context) error {
 			}
 			affected, err := result.RowsAffected()
 
-			if c.Table == "test_table2" {
-				err = errors.New("Error on test table2")
-			}
 			if err != nil {
 				errs <- err
 				return
@@ -85,7 +83,7 @@ func (c CleanUpTable) cleanup(ctx context.Context) error {
 			if affected < limit {
 				redo = false
 			}
-			limit = c.Limit
+			limit = Limit
 		case <-time.After(time.Second):
 			limit = limit/2
 		case err := <-errs:
@@ -95,54 +93,27 @@ func (c CleanUpTable) cleanup(ctx context.Context) error {
 	return nil
 }
 
-func Cleanuprun(){
-	db, err := sqlx.Open("mysql", "testdb:testdb@tcp(mysql:3306)/testdb")
+func Cleanuprun(super *supervar.SuperVar){
+	configPath := flag.String("config", "cleanup/testdb.ini", "path to config")
+	flag.Parse()
+
+	cfg, err := ini.Load(*configPath)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
-	res, _ := db.Query(`SHOW TABLES`)
+	tables := cfg.Section("housekeeping").KeysHash()
+	housekeeping := map[string]CleanUp{}
 
-	var table string
-
-	var schema_tables = map[string]CleanUpTable{}
-	for res.Next() {
-		res.Scan(&table)
-		var tempPeriod, tempTick time.Duration
-		var limit int64
-		switch {
-		case table == "test_table":
-			tempPeriod, _ = time.ParseDuration("1000h")
-			tempTick, _ = time.ParseDuration("2m")
-			limit = 1000
-		case table == "test_table2":
-			tempPeriod, _ = time.ParseDuration("3.5h")
-			tempTick, _ = time.ParseDuration("3m")
-			limit = 1000
-		default:
-			tempPeriod, _ = time.ParseDuration("50h")
-			tempTick, _ = time.ParseDuration("1.5m")
-			limit = 10000
-		}
-
-		tempSchema := CleanUpTable{
-			Db: db,
-			Table: table,
-			Period: tempPeriod,
-			Tick: tempTick,
-			Limit: limit,
-		}
-		schema_tables[tempSchema.Table] = tempSchema
+	for table, period := range tables {
+		tempPeriod, _ := time.ParseDuration(period)
+		housekeeping[table] = CleanUp{table, tempPeriod}
 	}
 
-	var wg sync.WaitGroup
-	runtime.GOMAXPROCS(runtime.NumCPU())
-
-	ctx := context.TODO()
-	for _, CleanupStruct := range schema_tables {
-
-		wg.Add(1)
-		go CleanupStruct.start(&wg, ctx)
+	ctx := context.Background()
+	for _, c := range housekeeping {
+		super.Wg.Add(1)
+		go c.start(super, ctx)
 	}
-	wg.Wait()
+	super.Wg.Wait()
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"log"
 	_ "github.com/go-sql-driver/mysql"
+	"sync"
 )
 
 const (
@@ -19,7 +20,8 @@ type ProductModel struct {
 	Db *sqlx.DB
 }
 
-func Congigrun() {
+func Congigrun(m *sync.Mutex) {
+	m.Lock()
 	db, err := DBConfig()
 	if err != nil {
 		log.Fatalf("Error %s when opening DB", err)
@@ -29,6 +31,7 @@ func Congigrun() {
 	productModel.Userconfig()
 	productModel.Tablesconfig()
 	log.Printf("testdb has been configured\n")
+	m.Unlock()
 	return
 }
 

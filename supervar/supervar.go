@@ -7,5 +7,5 @@ import (
 
 type SuperVar struct {
 	Db *sqlx.DB
-	wg *sync.WaitGroup
+	Wg *sync.WaitGroup
 }
