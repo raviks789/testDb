@@ -2,50 +2,82 @@ package cleanup
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/raviks789/testdb/supervar"
 	"gopkg.in/ini.v1"
-	"log"
+	log "github.com/sirupsen/logrus"
+	"sync"
 	"time"
 )
 
-type CleanUp struct {
-	Table string
-	Period time.Duration
+type Cleanup struct {
+	dbw          *sql.DB
+	wg           *sync.WaitGroup
+	tick         time.Duration
+	limit        int64
 }
 
-const (
-	Tick = time.Minute
-	Limit = int64(5000)
-)
-
-func (c CleanUp) start(super *supervar.SuperVar, ctx context.Context) {
-
-	go c.controller(super, ctx)
+type Tableconfig struct {
+	Table     string
+	Period    time.Duration
 }
 
-func (c CleanUp) controller(super *supervar.SuperVar, ctx context.Context) {
+
+func NewCleanup(db *sql.DB) *Cleanup {
+	return &Cleanup{
+		dbw: db,
+		wg:  &sync.WaitGroup{},
+		tick: time.Second,
+		limit: 5000,
+	}
+}
+
+
+func (c *Cleanup) Start() error {
+	configPath := flag.String("config", "cleanup/testdb.ini", "path to config")
+	flag.Parse()
+
+	cfg, err := ini.Load(*configPath)
+	if err != nil {
+		return err
+	}
+
+	tables := cfg.Section("housekeeping").KeysHash()
+	ctx := context.Background()
+
+	for table, period := range tables {
+		tempPeriod, _ := time.ParseDuration(period)
+		c.wg.Add(1)
+
+		go c.controller(Tableconfig{table, tempPeriod}, ctx)
+	}
+
+	c.wg.Wait()
+	return nil
+}
+
+func (c *Cleanup) controller(t Tableconfig, ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
 	for {
-		err := c.cleanup(super, ctx)
+		err := c.cleanup(t, ctx)
 		if err != nil {
 			cancel()
 		}
 		select {
-		case <-time.Tick(Tick):
+		case <-time.Tick(c.tick):
 		case <-ctx.Done():
-			log.Println(err)
-			super.Wg.Done()
+			log.Error(err)
+			c.wg.Done()
 			return
 		}
 	}
 }
 
-func (c CleanUp) cleanup(super *supervar.SuperVar, ctx context.Context) error {
+func (c *Cleanup) cleanup(t Tableconfig, ctx context.Context) error {
 
 	redo := true
 
@@ -54,16 +86,18 @@ func (c CleanUp) cleanup(super *supervar.SuperVar, ctx context.Context) error {
 
 	errs := make(chan error, 1)
 	defer close(errs)
-	limit := Limit
+	limit := c.limit
+	tbl := t.Table
+	prd := t.Period
 
 	for redo {
 		go func() {
-			result, err := super.Db.ExecContext(
+			result, err := c.dbw.ExecContext(
 				ctx,
-				fmt.Sprintf(`DELETE FROM %s WHERE timestamp < ? LIMIT %d`, c.Table, limit),
-				time.Now().Add(-1*c.Period).Unix())
+				fmt.Sprintf(`DELETE FROM %s WHERE timestamp < ? LIMIT %d`, tbl, limit),
+				time.Now().Add(-1*prd).Unix())
 			if err != nil {
-				fmt.Println(c.Table)
+				fmt.Println(prd)
 
 				errs <- err
 				return
@@ -74,7 +108,10 @@ func (c CleanUp) cleanup(super *supervar.SuperVar, ctx context.Context) error {
 				errs <- err
 				return
 			}
-			log.Printf("Rows affected in %s: %v", c.Table, affected)
+			if tbl == "test_table" {
+				errs <- errors.New("test_table")
+			}
+			log.Printf("Rows affected in %s: %v", tbl, affected)
 			rowsAffected <- affected
 		}()
 
@@ -83,7 +120,7 @@ func (c CleanUp) cleanup(super *supervar.SuperVar, ctx context.Context) error {
 			if affected < limit {
 				redo = false
 			}
-			limit = Limit
+			limit = c.limit
 		case <-time.After(time.Second):
 			limit = limit/2
 		case err := <-errs:
@@ -92,28 +129,29 @@ func (c CleanUp) cleanup(super *supervar.SuperVar, ctx context.Context) error {
 	}
 	return nil
 }
-
-func Cleanuprun(super *supervar.SuperVar){
-	configPath := flag.String("config", "cleanup/testdb.ini", "path to config")
-	flag.Parse()
-
-	cfg, err := ini.Load(*configPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	tables := cfg.Section("housekeeping").KeysHash()
-	housekeeping := map[string]CleanUp{}
-
-	for table, period := range tables {
-		tempPeriod, _ := time.ParseDuration(period)
-		housekeeping[table] = CleanUp{table, tempPeriod}
-	}
-
-	ctx := context.Background()
-	for _, c := range housekeeping {
-		super.Wg.Add(1)
-		go c.start(super, ctx)
-	}
-	super.Wg.Wait()
-}
+//
+//func Cleanuprun(db *sql.DB){
+//	configPath := flag.String("config", "cleanup/testdb.ini", "path to config")
+//	flag.Parse()
+//
+//	cfg, err := ini.Load(*configPath)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	wg := &sync.WaitGroup{}
+//	tables := cfg.Section("housekeeping").KeysHash()
+//	housekeeping := map[string]CleanUp{}
+//
+//	for table, period := range tables {
+//		tempPeriod, _ := time.ParseDuration(period)
+//		housekeeping[table] = CleanUp{table, tempPeriod}
+//	}
+//
+//	ctx := context.Background()
+//	for _, c := range housekeeping {
+//		wg.Add(1)
+//		go c.start(db, wg, ctx)
+//	}
+//	wg.Wait()
+//}

@@ -1,14 +1,12 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
-	"github.com/jmoiron/sqlx"
 	"github.com/raviks789/testdb/cleanup"
+	log "github.com/sirupsen/logrus"
 	"github.com/raviks789/testdb/config"
-	"github.com/raviks789/testdb/supervar"
-	"log"
 	"sync"
-	//"github.com/raviks789/testdb/insertworker"
 )
 
 func main() {
@@ -17,19 +15,15 @@ func main() {
 	fmt.Println("Testing clean up on testdb")
 	var m sync.Mutex
 	config.Congigrun(&m)
-	db, err := sqlx.Open("mysql", "testdb:testdb@tcp(mysql:3306)/testdb")
+	db, err := sql.Open("mysql", "testdb:testdb@tcp(mysql:3306)/testdb")
 	if err != nil {
 		log.Println(err)
 	}
-	defer db.Close()
 
-	super := supervar.SuperVar{
-		Db: db,
-		Wg: &sync.WaitGroup{},
+	cu := cleanup.NewCleanup(db)
+	if errcu := cu.Start(); errcu != nil {
+		log.Error(errcu)
 	}
-	//go insertworker.Workerrun()
-	go cleanup.Cleanuprun(&super)
-
 	forever()
 }
 

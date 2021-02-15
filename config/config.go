@@ -93,7 +93,7 @@ func (productModel ProductModel) Userconfig() {
 	log.Printf("rows affected %d\n", n)
 
 	if n > 0 {
-		res, err = productModel.Db.Exec(fmt.Sprintf(`GRANT ALL ON %s.* TO %s@'%%'`, schemaName, username))
+		res, err = productModel.Db.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON %s.* TO %s@'%%' IDENTIFIED BY 'testdb'`, schemaName, username))
 		if err != nil {
 			log.Printf("Error %s when granting permissions User\n", err)
 			return

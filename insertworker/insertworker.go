@@ -1,11 +1,12 @@
 package insertworker
 
 import (
+	"database/sql"
 	"fmt"
 	"github.com/brianvoe/gofakeit"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/jmoiron/sqlx"
 	"log"
+	"math/rand"
 	"os"
 	"runtime"
 	"sync"
@@ -13,12 +14,13 @@ import (
 )
 
 type ProductModel struct {
-	Db *sqlx.DB
+	Db *sql.DB
 }
 
 func Workerrun() {
 	var ch = make(chan string)
 	var quit = make(chan bool, 1)
+	defer close(quit)
 
 	var wg sync.WaitGroup
 	xthreads := 8
@@ -26,7 +28,7 @@ func Workerrun() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	// username:password@protocol(address)/dbname?param=value
-	db, err := sqlx.Open("mysql", "testdb:testdb@tcp(mysql:3306)/testdb")
+	db, err := sql.Open("mysql", "testdb:testdb@tcp(mysql:3306)/testdb")
 
 	if err != nil {
 		fmt.Println(err)
@@ -39,10 +41,10 @@ func Workerrun() {
 		j := make([]int, 8)
 
 		now := time.Now()
-		nowUnix := now.Unix()
-
-		before1 := now.AddDate(-3, 0, 0).Unix()
-		before2 := now.AddDate(-1, 0 , 0).Unix()
+		nowUnix := TimeToMillisecs(now)
+		before1 := TimeToMillisecs(now.Add(-24*time.Hour))
+		//before2 := now.AddDate(-1, 0 , 0).Unix()
+		delta := nowUnix - before1
 
 		for i:=0; i<xthreads; i++ {
 			jobNo := i
@@ -55,19 +57,21 @@ func Workerrun() {
 				//	wg.Done()
 				//	return
 				//}
-				if before1 < nowUnix {
-					before1 += 1
-				} else {
-					before1 =time.Now().Unix()
-				}
+				//if before1 < nowUnix {
+				//	before1 += 1
+				//} else {
+				//	before1 =time.Now().Unix()
+				//}
 
-				if before2 < nowUnix {
-					before2 += 1
-				} else {
-					before2 =time.Now().Unix()
-				}
+
+                bf := rand.Int63n(delta) + before1
+				//if before2 < nowUnix {
+				//	before2 += 1
+				//} else {
+				//	before2 =time.Now().Unix()
+				//}
 				//InsertWorker(randData(), count) // insert row into test_table
-				if err := productModel.InsertWorker(a, jobNo, j[jobNo], before1, before2); err != nil {
+				if err := productModel.InsertWorker(a, jobNo, j[jobNo], bf); err != nil {
 					wg.Done()
 					quit <- true
 					return
@@ -79,8 +83,7 @@ func Workerrun() {
 	}
 	go func() {
 		defer close(ch)
-		for {
-			time.Sleep(time.Second * 2)
+		for i:=0; i<100 ; i++ {
 
 			select {
 			case ch <-randData():
@@ -100,7 +103,7 @@ func randData() string {
 	return gofakeit.Sentence(10)
 }
 
-func (productModel ProductModel) InsertWorker(a string, job, count int, before1, before2 int64) error { // (productModel ProductModel) InsertWorker(a string)
+func (productModel ProductModel) InsertWorker(a string, job, count int, before1 int64) error { // (productModel ProductModel) InsertWorker(a string)
 	if count%500 == 0 {
 		fmt.Printf("Insert Worker string: %v, job: %d, count: %d \n", a, job, count)
 	}
@@ -113,14 +116,14 @@ func (productModel ProductModel) InsertWorker(a string, job, count int, before1,
 	if inErr != nil {
 		return err
 	}
-	stmt2, err := productModel.Db.Prepare("INSERT INTO test_table2(test_table2.data2, test_table2.timestamp) VALUES(?, ?)")
-	if err != nil {
-		return err
-	}
-	_, inErr = stmt2.Exec(a, before2)
-	if inErr != nil {
-		return err
-	}
+	//stmt2, err := productModel.Db.Prepare("INSERT INTO test_table2(test_table2.data2, test_table2.timestamp) VALUES(?, ?)")
+	//if err != nil {
+	//	return err
+	//}
+	//_, inErr = stmt2.Exec(a, before2)
+	//if inErr != nil {
+	//	return err
+	//}
 	return nil
 }
 
@@ -161,4 +164,10 @@ func (productModel ProductModel) CountRows() int {
 
 	_ = productModel.Db.QueryRow("SELECT COUNT(*) FROM test_table").Scan(&count)
 	return count
+}
+
+// TimeToMillisecs returns t as ms since *nix epoch.
+func TimeToMillisecs(t time.Time) int64 {
+	sec := t.Unix()
+	return sec*1000 + int64(t.Sub(time.Unix(sec, 0))/time.Millisecond)
 }
