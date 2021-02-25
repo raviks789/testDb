@@ -1,14 +1,14 @@
 package cleanup
 
+import "C"
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
-	"gopkg.in/ini.v1"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/ini.v1"
 	"sync"
 	"time"
 )
@@ -17,14 +17,18 @@ type Cleanup struct {
 	dbw          *sql.DB
 	wg           *sync.WaitGroup
 	tick         time.Duration
-	limit        int64
+	limit        int
 }
+
+type Cleanupfunc func(ctx context.Context, tbl Tableconfig, db *sql.DB, limit int) (sql.Result, error)
+
+type Funcmap map[string]Cleanupfunc
 
 type Tableconfig struct {
 	Table     string
 	Period    time.Duration
+	Starttime time.Time
 }
-
 
 func NewCleanup(db *sql.DB) *Cleanup {
 	return &Cleanup{
@@ -34,7 +38,6 @@ func NewCleanup(db *sql.DB) *Cleanup {
 		limit: 5000,
 	}
 }
-
 
 func (c *Cleanup) Start() error {
 	configPath := flag.String("config", "cleanup/testdb.ini", "path to config")
@@ -48,22 +51,27 @@ func (c *Cleanup) Start() error {
 	tables := cfg.Section("housekeeping").KeysHash()
 	ctx := context.Background()
 
+	var CuConfig = Funcmap{
+		"test_table": CleanTestFunc,
+		"test_table2": CleanTest2Func,
+	}
+
 	for table, period := range tables {
 		tempPeriod, _ := time.ParseDuration(period)
 		c.wg.Add(1)
 
-		go c.controller(Tableconfig{table, tempPeriod}, ctx)
+		go c.controller(ctx, Tableconfig{table, tempPeriod, time.Now()}, CuConfig[table])
 	}
 
 	c.wg.Wait()
 	return nil
 }
 
-func (c *Cleanup) controller(t Tableconfig, ctx context.Context) {
+func (c *Cleanup) controller(ctx context.Context, t Tableconfig, cleanupfunc Cleanupfunc) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	for {
-		err := c.cleanup(t, ctx)
+		err, _ := c.cleanup(ctx, t, cleanupfunc)
 		if err != nil {
 			cancel()
 		}
@@ -77,11 +85,11 @@ func (c *Cleanup) controller(t Tableconfig, ctx context.Context) {
 	}
 }
 
-func (c *Cleanup) cleanup(t Tableconfig, ctx context.Context) error {
+func (c *Cleanup) cleanup(ctx context.Context, t Tableconfig, cleanupfunc Cleanupfunc) (error, int) {
 
 	redo := true
 
-	rowsAffected := make(chan int64, 1)
+	rowsAffected := make(chan int, 1)
 	defer close(rowsAffected)
 
 	errs := make(chan error, 1)
@@ -89,13 +97,12 @@ func (c *Cleanup) cleanup(t Tableconfig, ctx context.Context) error {
 	limit := c.limit
 	tbl := t.Table
 	prd := t.Period
+	numdel := 0
 
 	for redo {
 		go func() {
-			result, err := c.dbw.ExecContext(
-				ctx,
-				fmt.Sprintf(`DELETE FROM %s WHERE timestamp < ? LIMIT %d`, tbl, limit),
-				time.Now().Add(-1*prd).Unix())
+			result, err := cleanupfunc(ctx, t, c.dbw, limit)
+
 			if err != nil {
 				fmt.Println(prd)
 
@@ -104,54 +111,54 @@ func (c *Cleanup) cleanup(t Tableconfig, ctx context.Context) error {
 			}
 			affected, err := result.RowsAffected()
 
-			if err != nil {
-				errs <- err
-				return
-			}
-			if tbl == "test_table" {
-				errs <- errors.New("test_table")
-			}
+			//if tbl == "test_table" {
+			//	errs <- errors.New("test_table")
+			//}
 			log.Printf("Rows affected in %s: %v", tbl, affected)
-			rowsAffected <- affected
+			rowsAffected <- int(affected)
+			return
 		}()
 
 		select {
 		case affected:= <-rowsAffected:
+			numdel ++
 			if affected < limit {
 				redo = false
 			}
 			limit = c.limit
-		case <-time.After(time.Second):
+		case <-time.After(1*time.Second):
 			limit = limit/2
 		case err := <-errs:
-			return err
+			return err, numdel
 		}
 	}
-	return nil
+
+	return nil, numdel
 }
-//
-//func Cleanuprun(db *sql.DB){
-//	configPath := flag.String("config", "cleanup/testdb.ini", "path to config")
-//	flag.Parse()
-//
-//	cfg, err := ini.Load(*configPath)
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//
-//	wg := &sync.WaitGroup{}
-//	tables := cfg.Section("housekeeping").KeysHash()
-//	housekeeping := map[string]CleanUp{}
-//
-//	for table, period := range tables {
-//		tempPeriod, _ := time.ParseDuration(period)
-//		housekeeping[table] = CleanUp{table, tempPeriod}
-//	}
-//
-//	ctx := context.Background()
-//	for _, c := range housekeeping {
-//		wg.Add(1)
-//		go c.start(db, wg, ctx)
-//	}
-//	wg.Wait()
-//}
+
+func CleanTestFunc(ctx context.Context, tblcfg Tableconfig, db *sql.DB, limit int) (sql.Result, error){
+
+	event_time := TimeToMillisecs(tblcfg.Starttime.Add(-1*tblcfg.Period))
+	result, err := db.ExecContext(
+		ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE %s.timestamp < ? LIMIT %d`, tblcfg.Table, tblcfg.Table, limit),
+		event_time)
+
+	return result, err
+}
+
+func CleanTest2Func(ctx context.Context, tblcfg Tableconfig, db *sql.DB, limit int) (sql.Result, error){
+	result, err := db.ExecContext(
+		ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE %s.timestamp < ? LIMIT %d`, tblcfg.Table, tblcfg.Table, limit),
+		TimeToMillisecs(tblcfg.Starttime.Add(-1*tblcfg.Period)))
+
+	return result, err
+}
+
+
+// TimeToMillisecs returns t as ms since *nix epoch.
+func TimeToMillisecs(t time.Time) int64 {
+	sec := t.Unix()
+	return sec*1000 + int64(t.Sub(time.Unix(sec, 0))/time.Millisecond)
+}

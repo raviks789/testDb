@@ -3,8 +3,10 @@ module github.com/raviks789/testdb
 go 1.15
 
 require (
+	bou.ke/monkey v1.0.2
 	github.com/DATA-DOG/go-sqlmock v1.5.0 // indirect
 	github.com/brianvoe/gofakeit v3.18.0+incompatible
+	github.com/fortytw2/leaktest v1.3.0
 	github.com/go-ini/ini v1.62.0
 	github.com/go-sql-driver/mysql v1.5.0
 	github.com/jmoiron/sqlx v1.2.0
